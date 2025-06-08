@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crash Game - JetX Style</title>
+  <link rel="stylesheet" href="main.css" />
+</head>
+<body>
+  <div class="header">
+    <div class="logo">Jet<span class="highlight">X</span></div>
+    <div class="balance">💰 <span id="userBalance">405.54</span> XAF</div>
+    <div class="timer">⏱️ <span id="gameTimer">00:00</span></div>
+  </div>
+
+  <div class="history" id="crashHistory">
+    <!-- Historique des cotes -->
+  </div>
+
+  <div class="game-area">
+    <div class="multiplier" id="currentMultiplier">1.00x</div>
+    <div class="rocket" id="rocket">🚀</div>
+  </div>
+
+  <div class="bet-section">
+    <div class="bet-box">
+      <div class="top-row">
+        <span>X2</span>
+        <label>
+          <input type="checkbox" id="autoBet1" checked /> Auto Mise
+        </label>
+        <label>
+          <input type="checkbox" id="autoCashout1" checked /> Auto Collecter
+        </label>
+      </div>
+      <div class="middle-row">
+        <button onclick="changeBet(-10, 1)">-</button>
+        <input type="number" id="betAmount1" value="50" /> XAF
+        <button onclick="changeBet(10, 1)">+</button>
+      </div>
+      <div class="middle-row">
+        <button onclick="changeCashout(-0.05, 1)">-</button>
+        <input type="number" id="cashoutAt1" value="1.05" step="0.01" /> x
+        <button onclick="changeCashout(0.05, 1)">+</button>
+      </div>
+      <button class="bet-button" onclick="placeBet(1)">MISE</button>
+    </div>
+
+    <div class="bet-box">
+      <div class="top-row">
+        <span>X2</span>
+        <label>
+          <input type="checkbox" id="autoBet2" checked /> Auto Mise
+        </label>
+        <label>
+          <input type="checkbox" id="autoCashout2" checked /> Auto Collecter
+        </label>
+      </div>
+      <div class="middle-row">
+        <button onclick="changeBet(-10, 2)">-</button>
+        <input type="number" id="betAmount2" value="5" /> XAF
+        <button onclick="changeBet(10, 2)">+</button>
+      </div>
+      <div class="middle-row">
+        <button onclick="changeCashout(-0.05, 2)">-</button>
+        <input type="number" id="cashoutAt2" value="1.05" step="0.01" /> x
+        <button onclick="changeCashout(0.05, 2)">+</button>
+      </div>
+      <button class="bet-button" onclick="placeBet(2)">MISE</button>
+    </div>
+  </div>
+
+  <div class="players-list">
+    <h3>Utilisateurs</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Utilisateur</th>
+          <th>Mise</th>
+          <th>Collecter</th>
+          <th>Gain</th>
+        </tr>
+      </thead>
+      <tbody id="playersTable">
+        <!-- Données des joueurs -->
+      </tbody>
+    </table>
+  </div>
+
+  <div class="nav-bar">
+    <button class="active">Joueurs</button>
+    <button>Historique</button>
+    <button>Mes Mises</button>
+    <button>Tchat</button>
+    <button>Statistiques</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
