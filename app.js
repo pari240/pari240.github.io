@@ -1,157 +1,301 @@
-// Variables globales
-let currentMultiplier = 1.0;
-let isGameRunning = false;
-let crashPoint = 0;
-let gameInterval;
-let timerInterval;
-let seconds = 0;
+// === app.js - Jeu JetX Cartoon PAR complet, ~350 lignes ===
 
-// Fonction pour lancer une partie
-function startGame() {
-  if (isGameRunning) return;
-  isGameRunning = true;
-  currentMultiplier = 1.0;
-  updateMultiplierDisplay();
-  generateCrashPoint();
-  seconds = 0;
-  startTimer();
+// CONSTANTES
+const XAF_TO_PAR = 1/234;       // Conversion 1 PAR = 234 XAF
+const MIN_FAKE_BET_XAF = 200;
+const MAX_FAKE_BET_XAF = 1234;
+const ROUND_WAIT_MS = 4000;     // Attente avant lancement manche (4s)
+const ROUND_DURATION_MS = 12000;// Durée manche active (12s)
+const MAX_MULTIPLIER = 50;      // Multiplicateur max possible
+const FAKE_PLAYERS_COUNT = 200;  // Nombre faux joueurs
 
-  gameInterval = setInterval(() => {
-    currentMultiplier += 0.01 + currentMultiplier * 0.01;
-    updateMultiplierDisplay();
+// ETAT GLOBAL
+let state = {
+  balance: 100,      // Solde joueur en PAR (initial)
+  bet: 0,             // Mise actuelle en PAR
+  multiplier: 1,      // Multiplicateur actuel
+  roundPhase: 'waiting', // waiting, running, ended
+  cashedOut: false,   // Le joueur a cashout cette manche ?
+  fakePlayers: [],    // Liste des faux joueurs {name, bet, cashoutAt, cashedOut, gain}
+  chatMessages: [],   // Messages chat {user, text}
+  roundStartTime: 0,  // Timestamp début manche active
+  animationFrameId: null, // ID requestAnimationFrame
+};
 
-    if (currentMultiplier >= crashPoint) {
-      crashGame();
+// DOM ELEMENTS
+const balanceEl = document.querySelector('.balance .amount');
+const multiplierEl = document.querySelector('.multiplier');
+const betInput = document.getElementById('bet-input');
+const betButton = document.getElementById('bet-button');
+const cashoutButton = document.getElementById('cashout-button');
+const playersTableBody = document.querySelector('#players-table tbody');
+const chatInput = document.getElementById('chat-input');
+const chatSendButton = document.getElementById('chat-send');
+const chatMessagesContainer = document.getElementById('chat-messages');
+const statusEl = document.querySelector('.status');
+
+// UTILS
+
+function xafToPar(xaf){
+  return +(xaf * XAF_TO_PAR).toFixed(2);
+}
+
+function randomUserName(){
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  return letters.charAt(Math.floor(Math.random()*letters.length)) + '***' + (Math.floor(Math.random()*900)+100);
+}
+
+function saveState(){
+  localStorage.setItem('jetx_balance', state.balance);
+  localStorage.setItem('jetx_chat', JSON.stringify(state.chatMessages));
+}
+
+function loadState(){
+  const bal = parseFloat(localStorage.getItem('jetx_balance'));
+  if(!isNaN(bal)) state.balance = bal;
+
+  const chatRaw = localStorage.getItem('jetx_chat');
+  if(chatRaw){
+    try{
+      state.chatMessages = JSON.parse(chatRaw);
+    }catch{
+      state.chatMessages = [];
     }
-  }, 100);
+  }
 }
 
-// Génère un point de crash aléatoire
-function generateCrashPoint() {
-  // Valeur de crash entre 1.0 et 10.0, biaisée vers les petites valeurs
-  crashPoint = (Math.random() ** 2) * 10 + 1;
+// GENERER LES FAUX JOUEURS
+
+function generateFakePlayers(){
+  let arr = [];
+  for(let i=0; i<FAKE_PLAYERS_COUNT; i++){
+    const name = randomUserName();
+    const betXaf = MIN_FAKE_BET_XAF + Math.random()*(MAX_FAKE_BET_XAF - MIN_FAKE_BET_XAF);
+    const bet = xafToPar(betXaf);
+    const cashoutAt = +(1.1 + Math.random()*4).toFixed(2); // cashout entre 1.1x et 5.1x env.
+    arr.push({
+      name,
+      bet,
+      cashoutAt,
+      cashedOut:false,
+      gain:0,
+    });
+  }
+  return arr;
 }
 
-// Met à jour le multiplicateur affiché
-function updateMultiplierDisplay() {
-  const multiplierEl = document.getElementById("currentMultiplier");
-  multiplierEl.textContent = `${currentMultiplier.toFixed(2)}x`;
+// MISE A JOUR UI
+
+function updateUI(){
+  // Solde
+  balanceEl.textContent = state.balance.toFixed(2) + ' PAR';
+  // Multiplicateur
+  multiplierEl.textContent = state.multiplier.toFixed(2) + '×';
+
+  // Boutons
+  betInput.disabled = (state.roundPhase !== 'waiting');
+  betButton.disabled = (state.roundPhase !== 'waiting') || state.bet > state.balance || state.bet <= 0;
+  cashoutButton.disabled = (state.roundPhase !== 'running') || state.cashedOut || state.bet <= 0;
+
+  // Statut
+  if(state.roundPhase === 'waiting') statusEl.textContent = 'Placez votre mise...';
+  else if(state.roundPhase === 'running') statusEl.textContent = 'Manche en cours ! Cashout possible.';
+  else statusEl.textContent = 'Manche terminée. Nouvelle manche dans quelques secondes...';
+
+  // Tableau joueurs
+  playersTableBody.innerHTML = '';
+
+  // Faux joueurs
+  state.fakePlayers.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.name}</td>
+      <td>${p.bet.toFixed(2)}</td>
+      <td>${p.cashedOut ? p.cashoutAt.toFixed(2) + '×' : '—'}</td>
+      <td>${p.cashedOut ? p.gain.toFixed(2) : '—'}</td>
+    `;
+    playersTableBody.appendChild(tr);
+  });
+
+  // Joueur
+  if(state.bet > 0){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>Vous</strong></td>
+      <td><strong>${state.bet.toFixed(2)}</strong></td>
+      <td><strong>${state.cashedOut ? state.multiplier.toFixed(2) + '×' : '—'}</strong></td>
+      <td><strong>${state.cashedOut ? (state.bet * state.multiplier).toFixed(2) : '—'}</strong></td>
+    `;
+    playersTableBody.appendChild(tr);
+  }
+
+  renderChat();
 }
 
-// Termine une partie
-function crashGame() {
-  clearInterval(gameInterval);
-  clearInterval(timerInterval);
-  isGameRunning = false;
+// CHAT
 
-  document.getElementById("rocket").textContent = "💥";
-  updateHistory(currentMultiplier);
+function renderChat(){
+  chatMessagesContainer.innerHTML = '';
+  state.chatMessages.forEach(msg => {
+    const div = document.createElement('div');
+    div.classList.add('chat-message');
+    div.innerHTML = `<strong>${msg.user}:</strong> ${msg.text}`;
+    chatMessagesContainer.appendChild(div);
+  });
+  chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+}
+
+function sendMessage(){
+  const text = chatInput.value.trim();
+  if(text.length === 0) return;
+  state.chatMessages.push({user:'Vous', text});
+  chatInput.value = '';
+  renderChat();
+  saveState();
+}
+
+// LOGIQUE DU JEU
+
+function startWaitingPhase(){
+  state.roundPhase = 'waiting';
+  state.multiplier = 1;
+  state.cashedOut = false;
+  state.bet = 0;
+  state.fakePlayers = generateFakePlayers();
+  updateUI();
+  saveState();
 
   setTimeout(() => {
-    document.getElementById("rocket").textContent = "🚀";
-    autoBetIfNeeded();
-    startGame();
-  }, 3000);
+    startRunningPhase();
+  }, ROUND_WAIT_MS);
 }
 
-// Timer d'affichage
-function startTimer() {
-  const timerEl = document.getElementById("gameTimer");
-  timerInterval = setInterval(() => {
-    seconds++;
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    timerEl.textContent = `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-  }, 1000);
-}
-
-// Historique des crashs
-function updateHistory(value) {
-  const history = document.getElementById("crashHistory");
-  const span = document.createElement("span");
-  span.textContent = `${value.toFixed(2)}x`;
-  span.classList.add(value >= 2 ? "green" : "red");
-
-  history.prepend(span);
-  if (history.children.length > 15) {
-    history.removeChild(history.lastChild);
+function startRunningPhase(){
+  if(state.bet === 0){
+    alert('Pas de mise placée, manche annulée.');
+    startWaitingPhase();
+    return;
   }
+
+  state.roundPhase = 'running';
+  state.roundStartTime = performance.now();
+  state.cashedOut = false;
+  updateUI();
+
+  // lancer l'animation multiplicateur
+  animateMultiplier();
 }
 
-// Mises et auto-mises
-function placeBet(playerId) {
-  const amountInput = document.getElementById(`betAmount${playerId}`);
-  const cashoutInput = document.getElementById(`cashoutAt${playerId}`);
-  const amount = parseFloat(amountInput.value);
-  const cashoutAt = parseFloat(cashoutInput.value);
+function animateMultiplier(){
+  function step(timestamp){
+    if(state.roundPhase !== 'running'){
+      cancelAnimationFrame(state.animationFrameId);
+      return;
+    }
+    const elapsed = timestamp - state.roundStartTime;
+    if(elapsed >= ROUND_DURATION_MS){
+      state.multiplier = MAX_MULTIPLIER;
+      cashoutFakes();
+      endRound();
+      return;
+    }
+    // Calcul multiplicateur exponentiel style JetX
+    const progress = elapsed / ROUND_DURATION_MS;
+    state.multiplier = 1 + (progress*progress)*(MAX_MULTIPLIER-1);
 
-  if (!isGameRunning) return;
+    // Faux joueurs cashout
+    cashoutFakes();
 
-  const playerName = `Joueur${playerId}`;
-  const playersTable = document.getElementById("playersTable");
+    updateUI();
 
-  const row = document.createElement("tr");
-  row.innerHTML = `
-    <td>${playerName}</td>
-    <td>${amount.toFixed(0)} XAF</td>
-    <td>${cashoutAt.toFixed(2)}x</td>
-    <td id="gain${playerId}">En cours...</td>
-  `;
-  row.dataset.cashout = cashoutAt;
-  row.dataset.amount = amount;
-  row.dataset.playerId = playerId;
-
-  playersTable.appendChild(row);
+    state.animationFrameId = requestAnimationFrame(step);
+  }
+  state.animationFrameId = requestAnimationFrame(step);
 }
 
-// Auto mise au début de chaque manche
-function autoBetIfNeeded() {
-  [1, 2].forEach((id) => {
-    const auto = document.getElementById(`autoBet${id}`).checked;
-    if (auto) placeBet(id);
-  });
-}
-
-// Cashout automatique
-function checkAutoCashout() {
-  const rows = document.querySelectorAll("#playersTable tr");
-  rows.forEach((row) => {
-    const cashout = parseFloat(row.dataset.cashout);
-    const amount = parseFloat(row.dataset.amount);
-    const playerId = row.dataset.playerId;
-    const autoCash = document.getElementById(`autoCashout${playerId}`).checked;
-
-    const gainCell = row.querySelector(`#gain${playerId}`);
-
-    if (gainCell && gainCell.textContent === "En cours..." && currentMultiplier >= cashout) {
-      const gain = amount * cashout;
-      gainCell.textContent = `${gain.toFixed(0)} XAF ✅`;
+function cashoutFakes(){
+  state.fakePlayers.forEach(p => {
+    if(!p.cashedOut && state.multiplier >= p.cashoutAt){
+      p.cashedOut = true;
+      p.gain = +(p.bet * p.cashoutAt).toFixed(2);
     }
   });
 }
 
-// Boucle de vérification de cashout auto
-setInterval(() => {
-  if (isGameRunning) {
-    checkAutoCashout();
+function endRound(){
+  state.roundPhase = 'ended';
+  updateUI();
+
+  if(!state.cashedOut){
+    // joueur n'a pas cashout -> perte
+    alert(`Manche terminée ! Vous avez perdu votre mise de ${state.bet.toFixed(2)} PAR.`);
+  } else {
+    const gain = +(state.bet * state.multiplier).toFixed(2);
+    alert(`Manche terminée ! Vous avez cashouté avec ${state.multiplier.toFixed(2)}×, gain total: ${gain} PAR.`);
   }
-}, 100);
 
-// Fonctions de réglage des mises
-function changeBet(diff, id) {
-  const input = document.getElementById(`betAmount${id}`);
-  let val = parseInt(input.value) + diff;
-  if (val < 1) val = 1;
-  input.value = val;
-}
-function changeCashout(diff, id) {
-  const input = document.getElementById(`cashoutAt${id}`);
-  let val = parseFloat(input.value) + diff;
-  if (val < 1.01) val = 1.01;
-  input.value = val.toFixed(2);
+  state.bet = 0;
+  saveState();
+
+  // Nouvelle manche après délai
+  setTimeout(() => {
+    startWaitingPhase();
+  }, ROUND_WAIT_MS);
 }
 
-// Démarrer le jeu au chargement
-window.onload = () => {
-  startGame();
-};
+// ACTIONS JOUEUR
+
+function placeBet(){
+  if(state.roundPhase !== 'waiting'){
+    alert('Vous ne pouvez pas miser en cours de manche.');
+    return;
+  }
+  let bet = parseFloat(betInput.value);
+  if(isNaN(bet) || bet <= 0){
+    alert('Entrez une mise valide en PAR.');
+    return;
+  }
+  if(bet > state.balance){
+    alert('Solde insuffisant.');
+    return;
+  }
+  state.bet = bet;
+  state.balance -= bet;
+  updateUI();
+  saveState();
+}
+
+function cashout(){
+  if(state.roundPhase !== 'running'){
+    alert('Manche non commencée.');
+    return;
+  }
+  if(state.cashedOut){
+    alert('Vous avez déjà cashouté cette manche.');
+    return;
+  }
+  if(state.bet === 0){
+    alert('Vous n\'avez pas misé.');
+    return;
+  }
+
+  state.cashedOut = true;
+  const gain = +(state.bet * state.multiplier).toFixed(2);
+  state.balance += gain;
+  updateUI();
+  saveState();
+  alert(`Cashout à ${state.multiplier.toFixed(2)}× ! Vous gagnez ${gain} PAR.`);
+}
+
+// ÉVÉNEMENTS
+
+betButton.addEventListener('click', placeBet);
+cashoutButton.addEventListener('click', cashout);
+chatSendButton.addEventListener('click', sendMessage);
+chatInput.addEventListener('keydown', e => { if(e.key === 'Enter') sendMessage(); });
+
+// INIT
+
+loadState();
+updateUI();
+startWaitingPhase();
